@@ -1,0 +1,20 @@
+# Environment secrets — never commit these
+.env
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
