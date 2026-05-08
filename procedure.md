@@ -11,6 +11,9 @@ Use it as a reference to understand **what each command does and why we run it**
 3. [Week 1 — Backend Setup](#3-week-1--backend-setup)
 4. [Week 1 — Seed Data](#4-week-1--seed-data)
 5. [Week 1 — Testing the API](#5-week-1--testing-the-api)
+6. [Week 2 — Frontend Setup](#6-week-2--frontend-setup)
+7. [Week 2 — Dashboard Pages](#7-week-2--dashboard-pages)
+8. [Week 2 — Digital Roster & Schedule](#8-week-2--digital-roster--schedule)
 
 ---
 
@@ -310,6 +313,235 @@ Other examples:
 
 ---
 
+---
+
+## 6. Week 2 — Frontend Setup
+
+### What is a Frontend?
+The frontend is everything the user sees in the browser — buttons, charts, tables. We use **React** (a JavaScript library for building UIs) with **Tailwind CSS** (a utility-first CSS framework for styling) and **Chart.js** (a charting library).
+
+### Step 1 — Scaffold the React App with Vite
+
+```bash
+cd frontend
+npm create vite@5 . -- --template react
+```
+
+- `vite` — a modern build tool that starts a dev server and bundles your code. Much faster than the older Create React App.
+- `--template react` — tells Vite to set up a React project
+- `.` — scaffold inside the current folder (frontend/)
+- We use `vite@5` specifically because our Node.js version (v21) isn't supported by the latest Vite 6
+
+### Step 2 — Install All Dependencies
+
+```bash
+npm install
+npm install chart.js react-chartjs-2 react-router-dom
+npm install -D tailwindcss@3 postcss autoprefixer
+```
+
+| Package | Purpose |
+|---------|---------|
+| `chart.js` | The charting engine — draws line charts, donut charts, etc. |
+| `react-chartjs-2` | React wrapper for Chart.js so you can use charts as React components |
+| `react-router-dom` | Handles navigation between pages (Sales / Inventory / Roster) without reloading the page |
+| `tailwindcss` | CSS framework — lets you style elements with class names like `bg-gray-900` or `text-white` |
+| `postcss` + `autoprefixer` | Tools Tailwind needs to process and inject CSS |
+| `-D` flag | Installs as a "dev dependency" — only needed during development, not in production |
+
+### Step 3 — Initialise Tailwind
+
+```bash
+npx tailwindcss init -p
+```
+
+- Creates `tailwind.config.js` — tells Tailwind which files to scan for class names
+- Creates `postcss.config.js` — wires Tailwind into the CSS build pipeline
+- `-p` — also generates the PostCSS config file in one step
+
+Then update `tailwind.config.js` to tell Tailwind where your files are:
+```js
+content: ['./index.html', './src/**/*.{js,jsx}'],
+```
+This is important — without it, Tailwind won't know which CSS classes to include in the final build.
+
+### Step 4 — Add Tailwind to CSS
+
+Replace the contents of `src/index.css` with:
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+```
+
+These three lines import Tailwind's full style system into your app.
+
+### Step 5 — Understanding the Frontend File Structure
+
+```
+frontend/
+├── src/
+│   ├── main.jsx              → Entry point — mounts the React app into index.html
+│   ├── App.jsx               → Root component — defines the layout and routes
+│   ├── index.css             → Global styles (Tailwind directives)
+│   ├── components/
+│   │   └── Sidebar.jsx       → Dark sidebar with navigation links
+│   ├── hooks/
+│   │   └── useFetch.js       → Reusable hook to fetch data from the backend
+│   └── pages/
+│       ├── SalesPage.jsx     → Sales charts + KPI cards
+│       ├── InventoryPage.jsx → Stock level table
+│       └── RosterPage.jsx    → Employee list + daily schedule
+└── tailwind.config.js
+```
+
+### Step 6 — Start the Frontend Dev Server
+
+```bash
+cd frontend
+npm run dev
+```
+
+- Starts Vite's development server on `http://localhost:5173`
+- **Hot Module Replacement (HMR)** — the browser automatically updates when you save a file, without a full page reload
+
+**Important:** You need both servers running at the same time:
+- Backend on `http://localhost:3001` (Node.js — provides the data)
+- Frontend on `http://localhost:5173` (Vite — serves the UI)
+
+Open two separate terminal windows, one for each.
+
+### Key Concepts
+
+#### What is a React Component?
+A component is a reusable piece of UI — like a Lego brick. Each `.jsx` file exports one component. You combine components to build pages.
+
+```jsx
+export default function Sidebar() {
+  return <aside>...</aside>
+}
+```
+
+#### What is a React Hook?
+A hook is a special function that gives components extra powers. Common ones:
+- `useState` — stores a value that can change (e.g. selected category)
+- `useEffect` — runs code when something changes (e.g. fetch data when date changes)
+- Custom hooks (like our `useFetch`) — reusable logic you write yourself
+
+#### What is React Router?
+React Router lets you build a **Single Page Application (SPA)** — the URL changes and the correct page component renders, but the browser never actually reloads the page.
+
+```jsx
+<Routes>
+  <Route path="/sales"     element={<SalesPage />} />
+  <Route path="/inventory" element={<InventoryPage />} />
+  <Route path="/roster"    element={<RosterPage />} />
+</Routes>
+```
+
+#### What is `useFetch`?
+Our custom hook that fetches data from the backend:
+```js
+const { data, loading, error } = useFetch('/api/sales?limit=5')
+```
+- `data` — the result array from the API
+- `loading` — `true` while waiting for the response (show a spinner)
+- `error` — error message if the request failed
+
+---
+
+## 7. Week 2 — Dashboard Pages
+
+### Sales Page (`/sales`)
+
+Displays two Chart.js charts and two KPI cards, with a category filter dropdown.
+
+**Line Chart — Weekly Revenue Trend**
+- Takes all daily sales records and groups them into weekly buckets
+- Uses `useMemo` to avoid re-calculating every render (performance optimisation)
+- `useMemo` only recalculates when `data` changes
+
+**Donut Chart — Sales by Category**
+- Aggregates total revenue per category (AIRism, Heattech, Outerwear, Tops)
+- Shows the proportion each category contributes to total sales
+
+**Category Filter**
+- A `<select>` dropdown that changes the API query:
+  - All → `/api/sales?limit=365`
+  - Heattech → `/api/sales?limit=365&category=Heattech`
+- When the query changes, `useFetch` re-fetches automatically
+
+### Inventory Page (`/inventory`)
+
+A filterable table showing all products with stock levels.
+
+- **Low Stock toggle** — checkbox that adds `?low_stock=true` to the query, showing only items at or below their reorder point
+- **Status badge** — green "OK" or red "Reorder" based on `needs_reorder` field from the API
+- **Category filter** — same dropdown pattern as the Sales page
+
+### Roster Page (`/roster`)
+
+Two tabs — see Section 8 below.
+
+---
+
+## 8. Week 2 — Digital Roster & Schedule
+
+### Why We Added This
+The sprint required: *"a schedule interface showing who is performing what task during which time slot"* and *"manual schedule adjustments."* The employee list alone didn't satisfy this.
+
+### New Backend Routes Added
+
+**`GET /api/shifts?date=YYYY-MM-DD`**
+Returns all shifts for a given day, joined with employee name and task info.
+
+**`PUT /api/shifts/:id`**
+Updates a single shift — used when the manager reassigns a task or changes a status.
+
+**`GET /api/tasks`**
+Returns all tasks with their priority level — used to populate the task dropdown.
+
+### Seed Shifts Script
+
+```bash
+python database/seed_shifts.py
+```
+
+Generates shifts for today ±7 days based on each employee's `availability_mask`.
+- If `availability_mask[weekday] === '1'` → employee works that day
+- Assigns a random task and shift time (8–16, 9–17, 10–18, or 12–20)
+- Past shifts → status `Completed`, today/future → `Active`
+
+### Daily Schedule Tab
+
+The key feature of Week 2. A date picker drives everything:
+
+1. Manager picks a date
+2. Frontend fetches `GET /api/shifts?date=YYYY-MM-DD`
+3. Each row shows: employee name, type, shift hours, current task, priority, status
+4. **Task dropdown** — changing it fires `PUT /api/shifts/:id` with the new `current_task_id`
+5. **Status dropdown** — mark as Active / Sick / Swap Requested / Completed
+
+**Optimistic update:** The UI updates instantly when you change a dropdown, then the save happens in the background. This makes the app feel fast even if the network is slow.
+
+**Priority colour coding:**
+- P1 (Critical) → Red badge — Cashier, Sales Floor, Fitting Room
+- P2 (Supporting) → Amber badge — Stock Room, Online Fulfilment
+- P3 (Flexible) → Green badge — Folding, General Cleaning
+
+### How Manual Adjustments Work (Data Flow)
+
+```
+Manager clicks task dropdown
+  → React state updates immediately (optimistic)
+  → fetch PUT /api/shifts/123 { current_task_id: 2 }
+    → Express route updates the DB row
+    → Returns the updated shift
+      → React state syncs with confirmed data
+```
+
+---
+
 ## Glossary
 
 | Term | Meaning |
@@ -329,3 +561,16 @@ Other examples:
 | **.env** | A file storing secret config values like passwords — never share this |
 | **Foreign Key** | A column that links to the ID of another table |
 | **Connection Pool** | A group of reusable database connections for performance |
+| **React** | JavaScript library for building UIs out of reusable components |
+| **Vite** | Fast build tool and dev server for modern JavaScript projects |
+| **Tailwind CSS** | CSS framework — style elements using utility class names instead of writing CSS files |
+| **Component** | A reusable piece of UI in React — each `.jsx` file is usually one component |
+| **Hook** | A special React function that gives components powers like state and side effects |
+| **useState** | React hook — stores a value that can change and re-renders the UI when it does |
+| **useEffect** | React hook — runs code when something changes (e.g. fetch data when the date picker changes) |
+| **useMemo** | React hook — caches an expensive calculation so it doesn't re-run on every render |
+| **SPA** | Single Page Application — page never fully reloads; React Router swaps components instead |
+| **HMR** | Hot Module Replacement — Vite updates the browser instantly when you save a file |
+| **Optimistic update** | Update the UI immediately before the server confirms, making the app feel faster |
+| **PUT request** | HTTP request type meaning "update this existing resource" |
+| **React Router** | Library that maps URL paths to page components without reloading the browser |
