@@ -5,14 +5,17 @@ Endpoints:
   GET  /health
   GET  /forecast?category=AIRism&days=7
   POST /task-allocation  { predicted_revenue, available_staff, event_type }
+  POST /dws/generate     { date, employees }
 """
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import List
 from forecaster import train_models, predict_next_days, predict_all_categories, CATEGORIES
 from task_allocator import allocate
+from dws_generator import generate as generate_dws, STORE_HOURS, TASKS
 
 
 @asynccontextmanager
@@ -73,3 +76,41 @@ def task_allocation(req: AllocationRequest):
         raise HTTPException(status_code=400, detail='available_staff must be at least 1')
     result = allocate(req.predicted_revenue, req.available_staff, req.event_type)
     return result
+
+
+# ─── DWS Generator ───────────────────────────────────────────────────────────
+
+class EmployeeIn(BaseModel):
+    id:   int
+    name: str
+    type: str
+    skills: List[str] = []
+
+
+class DWSRequest(BaseModel):
+    date:      str
+    employees: List[EmployeeIn]
+
+
+@app.post('/dws/generate')
+def dws_generate(req: DWSRequest):
+    if not req.employees:
+        raise HTTPException(status_code=400, detail='No employees provided')
+    try:
+        result = generate_dws(req.date, [e.model_dump() for e in req.employees])
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get('/dws/store-hours')
+def dws_store_hours():
+    days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+    return {
+        'hours': [{'day': days[i], 'open': v[0], 'close': v[1]} for i, v in STORE_HOURS.items()]
+    }
+
+
+@app.get('/dws/tasks')
+def dws_tasks():
+    return {'tasks': TASKS}

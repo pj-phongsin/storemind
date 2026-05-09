@@ -57,11 +57,11 @@ while d <= end_date:
                 status = 'Completed'
             else:
                 status = 'Active'
-            shifts.append((emp['id'], start_dt, end_dt, task_id, status))
+            shifts.append((emp['id'], d, start_dt, end_dt, task_id, status))
     d += timedelta(days=1)
 
 cur.executemany(
-    'INSERT INTO shifts (employee_id, start_time, end_time, current_task_id, status) VALUES (%s,%s,%s,%s,%s)',
+    'INSERT INTO shifts (employee_id, shift_date, start_time, end_time, current_task_id, status) VALUES (%s,%s,%s,%s,%s,%s)',
     shifts,
 )
 

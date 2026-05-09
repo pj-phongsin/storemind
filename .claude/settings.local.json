@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s http://localhost:8000/dws/tasks)",
+      "Bash(curl -s -X POST \"http://localhost:3001/api/dws/generate?date=2026-05-10\")",
+      "Bash(python3 -m json.tool)"
+    ]
+  }
+}
