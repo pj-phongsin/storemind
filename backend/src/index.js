@@ -7,6 +7,7 @@ const inventoryRouter = require('./routes/inventory');
 const employeesRouter = require('./routes/employees');
 const shiftsRouter    = require('./routes/shifts');
 const tasksRouter     = require('./routes/tasks');
+const forecastRouter  = require('./routes/forecast');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -21,5 +22,6 @@ app.use('/api/inventory', inventoryRouter);
 app.use('/api/employees', employeesRouter);
 app.use('/api/shifts',    shiftsRouter);
 app.use('/api/tasks',     tasksRouter);
+app.use('/api/forecast',  forecastRouter);
 
 app.listen(PORT, () => console.log(`StoreMind backend running on port ${PORT}`));

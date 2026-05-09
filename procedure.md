@@ -14,6 +14,10 @@ Use it as a reference to understand **what each command does and why we run it**
 6. [Week 2 — Frontend Setup](#6-week-2--frontend-setup)
 7. [Week 2 — Dashboard Pages](#7-week-2--dashboard-pages)
 8. [Week 2 — Digital Roster & Schedule](#8-week-2--digital-roster--schedule)
+9. [Week 3 — ML Service Setup](#9-week-3--ml-service-setup)
+10. [Week 3 — Demand Forecasting Model](#10-week-3--demand-forecasting-model)
+11. [Week 3 — Task Priority Logic](#11-week-3--task-priority-logic)
+12. [Week 3 — Connecting ML to Backend & Frontend](#12-week-3--connecting-ml-to-backend--frontend)
 
 ---
 
@@ -542,6 +546,260 @@ Manager clicks task dropdown
 
 ---
 
+---
+
+## 9. Week 3 — ML Service Setup
+
+### What is a Machine Learning Service?
+A separate Python program that handles AI/ML tasks. We keep it separate from Node.js because Python has the best ML libraries (Scikit-Learn, Pandas, NumPy). Node.js calls Python when it needs a prediction — they talk to each other over HTTP.
+
+### Architecture Overview
+
+```
+Browser (React)
+    ↕ HTTP
+Node.js Backend :3001   ← bridge layer, talks to both DB and ML
+    ↕ HTTP
+Python ML Service :8000  ← loads data, trains model, returns predictions
+    ↕ MySQL
+Database :3306
+```
+
+### File Structure
+
+```
+ml-service/
+├── main.py            → FastAPI app — defines the API endpoints
+├── forecaster.py      → Loads sales data, trains Random Forest, returns predictions
+├── task_allocator.py  → P1/P2/P3 allocation logic
+├── requirements.txt   → Python package list (like package.json for Python)
+└── .env               → Same DB credentials as backend
+```
+
+### Step 1 — Install Python Dependencies
+
+```bash
+cd ml-service
+pip install -r requirements.txt
+```
+
+`requirements.txt` lists all packages and their exact versions:
+
+| Package | Purpose |
+|---------|---------|
+| `fastapi` | Python web framework for building APIs (like Express but for Python) |
+| `uvicorn` | The server that runs FastAPI (like Node.js but for Python ASGI apps) |
+| `scikit-learn` | Machine Learning library — contains Random Forest and other models |
+| `pandas` | Data manipulation — reads data into tables (DataFrames) for analysis |
+| `numpy` | Numerical computing — fast math operations used by scikit-learn |
+| `mysql-connector-python` | Connects Python to MySQL |
+| `python-dotenv` | Reads the `.env` file for DB credentials |
+
+**Why pin versions?** Specifying exact versions (e.g. `scikit-learn==1.4.2`) ensures the code works the same on every machine — no surprises from an updated library changing its behaviour.
+
+### Step 2 — Copy the .env File
+
+```bash
+cp backend/.env ml-service/.env
+```
+
+The ML service connects to the same MySQL database as the backend, so it uses the same credentials.
+
+### Step 3 — Start the ML Service
+
+```bash
+cd ml-service
+python -m uvicorn main:app --port 8000 --reload
+```
+
+- `python -m uvicorn` — runs uvicorn using Python's module system (more reliable than calling `uvicorn` directly)
+- `main:app` — looks in `main.py` for a variable called `app` (the FastAPI instance)
+- `--port 8000` — runs on port 8000 (separate from Node.js on 3001)
+- `--reload` — auto-restarts when you save a file (development mode)
+
+At startup, FastAPI automatically trains the ML models — you'll see in the terminal:
+```
+[startup] Training forecasting models...
+[forecaster] Models trained for: ['AIRism', 'Heattech', 'Outerwear', 'Tops']
+[startup] Ready.
+```
+
+### Step 4 — Test the ML Service
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Predict Heattech revenue for next 7 days
+curl "http://localhost:8000/forecast?category=Heattech&days=7"
+
+# Generate task allocation for a high-traffic day
+curl -X POST http://localhost:8000/task-allocation \
+  -H "Content-Type: application/json" \
+  -d '{"predicted_revenue": 4000, "available_staff": 12, "event_type": "Sale"}'
+```
+
+**Running all three services at once:**
+You need three separate terminal windows:
+
+| Terminal | Command | Port |
+|----------|---------|------|
+| 1 | `cd backend && npm run dev` | 3001 |
+| 2 | `cd ml-service && python -m uvicorn main:app --port 8000 --reload` | 8000 |
+| 3 | `cd frontend && npm run dev` | 5173 |
+
+---
+
+## 10. Week 3 — Demand Forecasting Model
+
+### What is Demand Forecasting?
+Predicting how much of something will be sold in the future based on past data. Retailers use this to prepare the right amount of stock and staff.
+
+### What is a Random Forest?
+A machine learning model made of many Decision Trees working together.
+
+- A **Decision Tree** asks a series of yes/no questions to reach a prediction (like a flowchart)
+- A **Random Forest** builds 100 different trees, each trained on a slightly different random sample of the data, and averages their predictions
+- This makes it more accurate and robust than a single tree — less likely to overfit (memorise the training data instead of learning general patterns)
+
+```
+Sales data (365 days)
+    ↓
+Feature Engineering (day of week, month, seasonality, rolling average)
+    ↓
+Random Forest (100 trees trained per category)
+    ↓
+Predict revenue for next 7-30 days
+```
+
+### Feature Engineering
+
+Raw data (a date and a revenue number) isn't enough for the model — we need to extract useful signals. This is called **feature engineering**:
+
+| Feature | Why it helps |
+|---------|-------------|
+| `day_of_week` | Sales differ on weekdays vs weekends |
+| `month` | Captures seasonal patterns (winter vs summer) |
+| `day_of_year` | Fine-grained seasonality signal |
+| `week` | ISO week number for weekly patterns |
+| `rolling_7d` | 7-day rolling average — the model learns from recent momentum |
+
+### One Model Per Category
+We train 4 separate models — one for AIRism, one for Heattech, one for Outerwear, one for Tops. Each category has different seasonal behaviour:
+- **AIRism** peaks in Australian summer (Nov–Feb)
+- **Heattech** peaks in Australian winter (May–Aug)
+
+Training separate models lets each one learn its own seasonal pattern without confusing the others.
+
+### Model Caching
+Training takes a few seconds. We train once at startup and store the models in a Python dictionary (`_models`). Every `/forecast` request reuses the already-trained models — fast responses without re-training.
+
+### Making a Prediction for Future Dates
+For future dates we don't have real `rolling_7d` data, so we simulate it:
+```python
+rolling = (rolling * 6 + predicted) / 7  # update rolling average with each new prediction
+```
+This carries the momentum forward day by day.
+
+---
+
+## 11. Week 3 — Task Priority Logic
+
+### The Business Problem
+When the AI predicts a high-revenue day, the manager needs to know: *how should I deploy my staff?* The task allocator answers this automatically.
+
+### Traffic Classification
+First, we classify the predicted daily revenue into a traffic level:
+
+| Revenue | Traffic Level |
+|---------|--------------|
+| Under $1,500 | Low |
+| $1,500 – $3,500 | Medium |
+| Over $3,500 | High |
+
+### Allocation Ratios
+Each traffic level + event type combination has pre-defined ratios for P1/P2/P3:
+
+| Traffic | Event | P1 | P2 | P3 |
+|---------|-------|----|----|-----|
+| High | Normal | 65% | 25% | 10% |
+| High | Sale | 75% | 20% | 5% |
+| High | Delivery | 55% | 35% | 10% |
+| Medium | Normal | 55% | 30% | 15% |
+| Low | Normal | 50% | 30% | 20% |
+
+**Why these ratios?**
+- P1 (Critical) — Cashier, Sales Floor, Fitting Room — customer-facing, always staffed first
+- P2 (Supporting) — Stock Room, Online Fulfilment — scales up on Delivery days
+- P3 (Flexible) — Folding, Cleaning — gets more staff only when traffic is low
+
+### Example Calculation
+- Predicted revenue: $4,000 → **High traffic**
+- Event type: Sale
+- Available staff: 12
+- Ratios: P1=75%, P2=20%, P3=5%
+- Result: P1=9 staff, P2=2 staff, P3=1 staff
+
+### Optimistic Update Pattern
+The frontend updates the UI immediately when the user clicks "Generate Auto-Task", then waits for the server response. If something goes wrong, it shows an error. This makes the app feel instant.
+
+---
+
+## 12. Week 3 — Connecting ML to Backend & Frontend
+
+### The Bridge Pattern
+Node.js doesn't run Python code directly. Instead, the backend acts as a **proxy** — it receives requests from the frontend, forwards them to the Python service, and returns the response.
+
+```
+Frontend → GET /api/forecast → Node.js → GET /forecast → Python ML → data → Node.js → data → Frontend
+```
+
+**Why use a bridge instead of calling Python directly from the frontend?**
+- Security: the ML service URL stays private (server-side only)
+- Flexibility: you can add authentication, caching, or logging in the bridge layer
+- In production (Week 4), the ML service won't be publicly accessible — only Node.js can reach it
+
+### New Backend Routes
+
+**`GET /api/forecast?category=all&days=7`**
+Proxies to `GET http://localhost:8000/forecast`
+
+**`POST /api/forecast/task-allocation`**
+Proxies to `POST http://localhost:8000/task-allocation`
+
+If the ML service is not running, the backend returns a `502 Bad Gateway` error with a helpful message.
+
+### Frontend — AI Forecast Page (`/forecast`)
+
+**Forecast Chart:**
+- Fetches `/api/forecast?category=all&days=7` (or 14 or 30)
+- Groups data by category and date
+- Renders a multi-line Chart.js chart — one line per category
+- KPI cards show total forecast revenue and predicted peak day
+
+**Generate Auto-Task Panel:**
+- Manager inputs: predicted revenue, available staff count, event type
+- Clicks "Generate Auto-Task" → `POST /api/forecast/task-allocation`
+- Results show as colour-coded progress bars (P1=red, P2=amber, P3=green)
+- Each tier lists the tasks that staff should be assigned to
+- A plain-English recommendation is shown (e.g. "High traffic + Sale event — maximise cashiers and sales floor.")
+
+### What is `fetch()` with POST?
+```js
+const r = await fetch('/api/forecast/task-allocation', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ predicted_revenue: 3500, available_staff: 12, event_type: 'Normal' }),
+})
+const result = await r.json()
+```
+- `method: 'POST'` — sending data to the server, not just reading it
+- `headers` — tells the server the body is JSON format
+- `body: JSON.stringify(...)` — converts a JavaScript object into a JSON string to send
+- `await r.json()` — parses the response JSON back into a JavaScript object
+
+---
+
 ## Glossary
 
 | Term | Meaning |
@@ -574,3 +832,18 @@ Manager clicks task dropdown
 | **Optimistic update** | Update the UI immediately before the server confirms, making the app feel faster |
 | **PUT request** | HTTP request type meaning "update this existing resource" |
 | **React Router** | Library that maps URL paths to page components without reloading the browser |
+| **FastAPI** | Python web framework for building APIs — fast, modern, auto-generates docs at `/docs` |
+| **Uvicorn** | The ASGI server that runs FastAPI (equivalent to Node.js for Python async apps) |
+| **Machine Learning (ML)** | Programs that learn patterns from data to make predictions, without being explicitly programmed |
+| **Random Forest** | An ML model that builds many Decision Trees and averages their predictions for accuracy |
+| **Decision Tree** | A model that makes predictions by asking a series of yes/no questions — like a flowchart |
+| **Feature Engineering** | Transforming raw data into useful inputs for a model (e.g. extracting month and day-of-week from a date) |
+| **Overfitting** | When a model memorises training data instead of learning general patterns — performs badly on new data |
+| **Training** | The process of fitting an ML model to historical data so it can make predictions |
+| **Prediction** | The output of a trained ML model when given new input data it hasn't seen before |
+| **Proxy / Bridge** | A server that forwards requests from one place to another — Node.js bridges frontend ↔ Python ML |
+| **502 Bad Gateway** | HTTP error meaning the server got a bad response from an upstream service (e.g. ML service is down) |
+| **Pandas DataFrame** | A 2D table-like data structure in Python — rows and columns, like a spreadsheet in code |
+| **Rolling Average** | Average of the last N values in a time series — smooths out noise and captures recent trends |
+| **Traffic Level** | Our classification of predicted revenue: Low / Medium / High — drives the P1/P2/P3 allocation ratios |
+| **POST request** | HTTP request type meaning "send this data to the server to create or compute something" |

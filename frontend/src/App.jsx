@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar'
 import SalesPage from './pages/SalesPage'
 import InventoryPage from './pages/InventoryPage'
 import RosterPage from './pages/RosterPage'
+import ForecastPage from './pages/ForecastPage'
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
           <Route path="/sales" element={<SalesPage />} />
           <Route path="/inventory" element={<InventoryPage />} />
           <Route path="/roster" element={<RosterPage />} />
+          <Route path="/forecast" element={<ForecastPage />} />
         </Routes>
       </main>
     </div>
