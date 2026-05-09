@@ -18,6 +18,9 @@ Use it as a reference to understand **what each command does and why we run it**
 10. [Week 3 — Demand Forecasting Model](#10-week-3--demand-forecasting-model)
 11. [Week 3 — Task Priority Logic](#11-week-3--task-priority-logic)
 12. [Week 3 — Connecting ML to Backend & Frontend](#12-week-3--connecting-ml-to-backend--frontend)
+13. [Week 4 — AI Reschedule Agent](#13-week-4--ai-reschedule-agent)
+14. [Week 4 — Shift Swap Marketplace](#14-week-4--shift-swap-marketplace)
+15. [Week 4 — Docker & Containerisation](#15-week-4--docker--containerisation)
 
 ---
 
@@ -800,6 +803,288 @@ const result = await r.json()
 
 ---
 
+---
+
+## 13. Week 4 — AI Reschedule Agent
+
+### What is the AI Reschedule Agent?
+An automated backend logic system that handles employee absences without manager involvement. When someone calls in sick, the agent follows a decision tree to find the best internal solution before escalating.
+
+### The Decision Logic (Step by Step)
+
+```
+Manager reports sick leave (employee_id + date)
+    ↓
+Find the employee's shift → get task + priority level
+    ↓
+Mark shift status = 'Sick'
+    ↓
+Is the task P1 (Critical)?
+  YES → Scan all P3 staff on the same day
+         → Filter by required skill
+         → Pick highest proficiency
+         → Reassign their task to cover the P1 gap
+         → Return reassignment report
+  NO  → P2/P3 tasks: lower impact, no reassignment needed
+         → Return informational action message
+```
+
+**Why P3 staff first?**
+P3 tasks (Folding, Cleaning) are "Flexible" — they can be paused without immediately harming the customer experience. P1 tasks (Cashier, Sales Floor, Fitting Room) cannot. So the agent takes someone from the least critical duty to cover the most critical one.
+
+### New Backend Route
+
+**`POST /api/agent/sick-leave`**
+```json
+Request body:  { "employee_id": 3, "date": "2026-05-10" }
+
+Response:
+{
+  "sick_employee":  "Amber Peterson",
+  "affected_task":  "Sales Floor Service",
+  "priority_level": 1,
+  "reassignment": {
+    "employee_name":    "Lauren Wood",
+    "from_task":        "Folding & Tidying",
+    "to_task":          "Sales Floor Service",
+    "proficiency_level": 5
+  },
+  "action": "Reallocated Lauren Wood from Folding & Tidying (P3) to cover Sales Floor Service (P1)."
+}
+```
+
+### Database Transaction
+The agent uses a **database transaction** to ensure all changes succeed or none do:
+
+```js
+await conn.beginTransaction();
+// ... mark shift Sick, reassign P3 employee ...
+await conn.commit();    // all changes saved together
+// if anything fails:
+await conn.rollback();  // undo everything, DB stays clean
+```
+
+**Why transactions?**
+If the server crashes after marking the shift Sick but before reassigning the P3 employee, the store would have two uncovered tasks. A transaction prevents this — either both changes succeed or neither does.
+
+### SQL Used in the Agent
+```sql
+-- Find the sick employee's shift and task details
+SELECT s.id, t.task_name, t.priority_level, t.required_skill_id
+FROM shifts s
+JOIN tasks t ON t.id = s.current_task_id
+WHERE s.employee_id = ? AND DATE(s.start_time) = ? AND s.status = 'Active'
+
+-- Find P3 staff on the same day with the required skill
+SELECT e.name, es.proficiency_level
+FROM shifts s
+JOIN employees e ON e.id = s.employee_id
+JOIN tasks t ON t.id = s.current_task_id
+JOIN employee_skills es ON es.employee_id = e.id AND es.skill_id = ?
+WHERE DATE(s.start_time) = ?
+  AND t.priority_level = 3
+ORDER BY es.proficiency_level DESC
+LIMIT 1
+```
+
+### Frontend — AI Agent Page (`/agent`)
+
+Three "how it works" cards explain the agent logic visually (Gap Assessment → Smart Reallocation → Escalation).
+
+**Sick Leave form:**
+1. Select the absent employee from a dropdown (populated from `/api/employees`)
+2. Pick the date
+3. Click "Report Sick Leave"
+4. The result shows: who was absent, what task was affected, who was reallocated, and from/to task with proficiency level
+
+Colour coding:
+- Green panel = internal reallocation succeeded
+- Amber panel = no reallocation possible, escalate
+
+---
+
+## 14. Week 4 — Shift Swap Marketplace
+
+### What is Shift Swap?
+Instead of a manager manually calling around to find cover, the system automatically identifies which employees are eligible to swap shifts — removing the manager from the coordination process entirely.
+
+### Eligibility Rules
+An employee is eligible to swap if they:
+1. **Have the required skill** for the shift's task
+2. **Are available that day** — their `availability_mask` shows a `1` for that weekday
+3. **Are not already scheduled** — no other Active shift on that date
+
+### Availability Mask to Weekday Mapping
+```
+availability_mask = "1111100"  (Mon–Fri available, Sat–Sun off)
+Index:               0123456   (0=Mon, 6=Sun)
+
+JavaScript Date.getDay() returns: 0=Sun, 1=Mon, ... 6=Sat
+So we remap: maskIndex = (getDay() === 0) ? 6 : getDay() - 1
+```
+
+### New Backend Route
+
+**`POST /api/agent/shift-swap`**
+```json
+Request body:  { "shift_id": 116 }
+
+Response:
+{
+  "employee_name":  "John Castillo",
+  "task":           "Stock Room Replenishment",
+  "required_skill": "Stock Room",
+  "status":         "Swap_Requested",
+  "eligible_peers": [
+    { "name": "Christine Brooks", "type": "FT", "proficiency_level": 4 },
+    { "name": "Jenna Juarez",     "type": "PT", "proficiency_level": 3 }
+  ],
+  "peer_count": 2
+}
+```
+
+### Why `GROUP BY` in the SQL?
+Without `GROUP BY`, the JOIN between `employees` and `employee_skills` would return one row per skill — causing duplicate employee entries in the results. `GROUP BY e.id` collapses them to one row per employee, using `MAX(proficiency_level)` to keep their best skill rating.
+
+```sql
+SELECT e.id, e.name, MAX(es.proficiency_level) AS proficiency_level
+FROM employees e
+JOIN employee_skills es ON es.employee_id = e.id
+WHERE ...
+GROUP BY e.id, e.name, e.type, e.availability_mask
+ORDER BY proficiency_level DESC
+```
+
+### Frontend — Shift Swap Panel
+- Dropdown shows all **Active** shifts for today
+- Click "Find Swap Peers" → shift is marked `Swap_Requested` in the DB
+- Ranked list of eligible candidates appears, sorted by proficiency
+- A manager can then contact the top candidate directly
+
+---
+
+## 15. Week 4 — Docker & Containerisation
+
+### What is Docker?
+Docker packages your application and all its dependencies into a **container** — a self-contained unit that runs the same way on any machine. No more "it works on my laptop" problems.
+
+**Key concepts:**
+
+| Term | Meaning |
+|------|---------|
+| **Image** | A blueprint/snapshot of your app — like a recipe |
+| **Container** | A running instance of an image — like a dish made from the recipe |
+| **Dockerfile** | Instructions to build an image, step by step |
+| **docker-compose** | A tool to run multiple containers together as one system |
+| **Volume** | Persistent storage that survives container restarts (used for MySQL data) |
+| **Health check** | A command Docker runs to verify a container is truly ready before starting dependents |
+
+### Project Dockerfiles
+
+#### `backend/Dockerfile`
+```dockerfile
+FROM node:20-alpine      # Start from official Node.js image (alpine = small Linux)
+WORKDIR /app             # All commands run inside /app
+COPY package*.json ./    # Copy dependency list first (Docker cache optimisation)
+RUN npm ci --only=production  # Install only production deps
+COPY src/ ./src/         # Copy source code
+EXPOSE 3001              # Document which port this container uses
+CMD ["node", "src/index.js"]  # Command to start the app
+```
+
+**Why copy `package.json` before the source code?**
+Docker builds in layers. If source code changes but `package.json` doesn't, Docker reuses the cached `npm install` layer — much faster rebuilds.
+
+#### `ml-service/Dockerfile`
+```dockerfile
+FROM python:3.11-slim    # Official Python image (slim = smaller size)
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt  # --no-cache-dir saves image size
+COPY *.py ./
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+`--host 0.0.0.0` is required inside Docker — without it, the server only listens on `localhost` inside the container and can't be reached from outside.
+
+#### `frontend/Dockerfile` (Multi-Stage Build)
+```dockerfile
+# Stage 1 — Build the React app
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build        # Produces /app/dist (static HTML/CSS/JS files)
+
+# Stage 2 — Serve with nginx
+FROM nginx:alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+EXPOSE 80
+```
+
+**Why two stages?**
+Stage 1 needs Node.js, npm, and all dev dependencies to build. Stage 2 only needs nginx to serve static files. The final image only contains Stage 2 — no Node.js, no source code, no node_modules. Result: a tiny, secure production image.
+
+### `docker-compose.yml`
+
+```yaml
+services:
+  db:           # MySQL — starts first, others wait for its health check
+  backend:      # Node.js — depends on db being healthy
+  ml-service:   # Python FastAPI — depends on db being healthy
+  frontend:     # nginx serving React — depends on backend
+```
+
+**Key concepts used:**
+
+`depends_on` with `condition: service_healthy` — ensures the database is fully ready before the backend or ML service tries to connect. Without this, the app would crash on startup because MySQL takes a few seconds to initialise.
+
+`volumes: db_data:/var/lib/mysql` — MySQL stores its data files here. Even if you restart or rebuild the container, your data persists.
+
+`healthcheck` — Docker periodically runs `mysqladmin ping` inside the DB container. Only when it succeeds does Docker start the dependent services.
+
+### Running the Whole Project with Docker
+
+```bash
+# 1. Copy the root env file and fill in your password
+cp .env.example .env
+
+# 2. Build all images and start all containers
+docker-compose up --build
+
+# 3. Seed the database (first time only)
+docker exec -it storemind-backend node -e "console.log('ready')"
+python database/seed.py
+python database/seed_shifts.py
+
+# 4. Open the app
+open http://localhost
+```
+
+To stop everything:
+```bash
+docker-compose down          # stops containers but keeps data
+docker-compose down -v       # stops containers AND deletes the database volume
+```
+
+### Running Locally (Without Docker)
+Open 3 terminal windows:
+
+```bash
+# Terminal 1 — Backend
+cd backend && npm run dev
+
+# Terminal 2 — ML Service
+cd ml-service && python -m uvicorn main:app --port 8000 --reload
+
+# Terminal 3 — Frontend
+cd frontend && npm run dev
+```
+
+---
+
 ## Glossary
 
 | Term | Meaning |
@@ -847,3 +1132,17 @@ const result = await r.json()
 | **Rolling Average** | Average of the last N values in a time series — smooths out noise and captures recent trends |
 | **Traffic Level** | Our classification of predicted revenue: Low / Medium / High — drives the P1/P2/P3 allocation ratios |
 | **POST request** | HTTP request type meaning "send this data to the server to create or compute something" |
+| **Docker** | Tool that packages apps into containers — runs identically on any machine |
+| **Container** | A running, isolated instance of a Docker image |
+| **Image** | A built snapshot of an app used to create containers |
+| **Dockerfile** | Step-by-step instructions for building a Docker image |
+| **docker-compose** | Tool to define and run multiple containers together as one system |
+| **Multi-stage build** | Dockerfile technique using two FROM stages — one to build, one to serve — produces a smaller final image |
+| **Volume** | Persistent Docker storage that survives container restarts (used for MySQL data) |
+| **Health check** | A command Docker runs to verify a container is truly ready before starting dependent services |
+| **`depends_on`** | docker-compose directive that controls startup order between services |
+| **Transaction** | A group of DB operations that all succeed or all fail together — prevents partial/corrupt data |
+| **Rollback** | Undoing all changes in a transaction if something goes wrong |
+| **`--host 0.0.0.0`** | Tells a server to listen on all network interfaces inside Docker, not just localhost |
+| **AI Agent** | Autonomous logic that makes decisions and takes actions based on rules — no manual input needed |
+| **Escalation** | The fallback path when automated logic can't solve a problem — hands off to a human or next system |
