@@ -4,6 +4,7 @@ import SalesPage from './pages/SalesPage'
 import InventoryPage from './pages/InventoryPage'
 import RosterPage from './pages/RosterPage'
 import ForecastPage from './pages/ForecastPage'
+import AgentPage from './pages/AgentPage'
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
           <Route path="/inventory" element={<InventoryPage />} />
           <Route path="/roster" element={<RosterPage />} />
           <Route path="/forecast" element={<ForecastPage />} />
+          <Route path="/agent"    element={<AgentPage />} />
         </Routes>
       </main>
     </div>
