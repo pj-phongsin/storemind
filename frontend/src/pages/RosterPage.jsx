@@ -6,12 +6,13 @@ const BASE = 'http://localhost:3001'
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 const SKILL_COLORS = {
-  'Cashier':           'bg-indigo-100 text-indigo-700',
-  'Fitting Room':      'bg-pink-100 text-pink-700',
-  'Sales Floor':       'bg-emerald-100 text-emerald-700',
-  'Stock Room':        'bg-amber-100 text-amber-700',
-  'Online Fulfilment': 'bg-sky-100 text-sky-700',
-  'Folding':           'bg-purple-100 text-purple-700',
+  'Sales Floor':   'bg-emerald-100 text-emerald-700',
+  'Cashier':       'bg-indigo-100 text-indigo-700',
+  'Fitting Room':  'bg-pink-100 text-pink-700',
+  'Alteration':    'bg-purple-100 text-purple-700',
+  'Runner':        'bg-amber-100 text-amber-700',
+  'Self Check-Out':'bg-sky-100 text-sky-700',
+  'Replenishment': 'bg-orange-100 text-orange-700',
 }
 
 const PRIORITY_STYLES = {

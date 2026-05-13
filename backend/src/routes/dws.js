@@ -17,7 +17,7 @@ router.post('/generate', async (req, res) => {
 
   try {
     // Get scheduled employees for the date with their skills
-    const [rows] = await db.query(
+    let [rows] = await db.query(
       `SELECT e.id, e.name, e.type,
               GROUP_CONCAT(sk.skill_name ORDER BY sk.skill_name SEPARATOR ',') AS skills
        FROM shifts s
@@ -29,8 +29,49 @@ router.post('/generate', async (req, res) => {
       [date]
     );
 
+    // No pre-seeded shifts — auto-create from availability_mask so any future
+    // date can be generated without running seed_shifts.py first.
     if (rows.length === 0) {
-      return res.status(404).json({ error: 'No active shifts found for this date. Run seed_shifts.py first.' });
+      const dayOfWeek = new Date(date).getUTCDay();               // 0=Sun … 6=Sat
+      const maskIdx   = dayOfWeek === 0 ? 6 : dayOfWeek - 1;     // convert to 0=Mon … 6=Sun
+
+      const [availRows] = await db.query(
+        `SELECT id FROM employees WHERE SUBSTRING(availability_mask, ?, 1) = '1'`,
+        [maskIdx + 1]   // SUBSTRING is 1-indexed
+      );
+
+      if (availRows.length === 0) {
+        return res.status(404).json({ error: 'No employees available for this date.' });
+      }
+
+      // Store hours by day (0=Mon … 6=Sun) as placeholder start/end times
+      const storeOpen  = ['09:00','09:00','09:00','09:00','09:00','09:30','10:00'][maskIdx];
+      const storeClose = ['17:30','17:30','17:30','21:00','21:00','17:00','17:00'][maskIdx];
+
+      const shiftValues = availRows.map(e => [
+        e.id, date,
+        `${date} ${storeOpen}:00`,
+        `${date} ${storeClose}:00`,
+        'Active',
+      ]);
+
+      await db.query(
+        `INSERT IGNORE INTO shifts (employee_id, shift_date, start_time, end_time, status) VALUES ?`,
+        [shiftValues]
+      );
+
+      // Re-fetch with skills
+      [rows] = await db.query(
+        `SELECT e.id, e.name, e.type,
+                GROUP_CONCAT(sk.skill_name ORDER BY sk.skill_name SEPARATOR ',') AS skills
+         FROM shifts s
+         JOIN employees e ON e.id = s.employee_id
+         LEFT JOIN employee_skills es ON es.employee_id = e.id
+         LEFT JOIN skills sk ON sk.id = es.skill_id
+         WHERE s.shift_date = ? AND s.status = 'Active'
+         GROUP BY e.id, e.name, e.type`,
+        [date]
+      );
     }
 
     const employees = rows.map(r => ({

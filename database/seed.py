@@ -97,38 +97,52 @@ cur.executemany(
 print(f'  → {len(sales_rows)} sales records inserted')
 
 # ─────────────────────────────────────────
-# Skills
+# Skills (spec-v2)
 # ─────────────────────────────────────────
-SKILL_NAMES = ['Cashier', 'Fitting Room', 'Sales Floor', 'Stock Room', 'Online Fulfilment', 'Folding']
+SKILL_NAMES = [
+    'Sales Floor', 'Cashier', 'Fitting Room',
+    'Alteration', 'Runner', 'Self Check-Out', 'Replenishment',
+]
+print('Clearing old workforce data...')
+cur.execute('SET FOREIGN_KEY_CHECKS = 0')
+cur.execute('DELETE FROM employee_skills')
+cur.execute('DELETE FROM shifts')
+cur.execute('DELETE FROM employees')
+cur.execute('DELETE FROM skills')
+cur.execute('DELETE FROM tasks')
+cur.execute('SET FOREIGN_KEY_CHECKS = 1')
+
 print('Inserting skills...')
-skill_ids = []
+skill_map = {}  # skill_name -> id
 for sn in SKILL_NAMES:
     cur.execute('INSERT IGNORE INTO skills (skill_name) VALUES (%s)', (sn,))
     cur.execute('SELECT id FROM skills WHERE skill_name=%s', (sn,))
-    skill_ids.append(cur.fetchone()[0])
+    skill_map[sn] = cur.fetchone()[0]
 
 # ─────────────────────────────────────────
-# Tasks (mapped to skills + priority)
+# Tasks (spec-v2, with task_code)
 # ─────────────────────────────────────────
 TASKS = [
-    ('Cashier (POS)',              1, 'Cashier'),
-    ('Sales Floor Service',        1, 'Sales Floor'),
-    ('Fitting Room Supervision',   1, 'Fitting Room'),
-    ('Stock Room Replenishment',   2, 'Stock Room'),
-    ('Online Order Fulfilment',    2, 'Online Fulfilment'),
-    ('Folding & Tidying',          3, 'Folding'),
-    ('General Cleaning',           3, None),
+    ('SF_A', 'Sale Floor - Zone A', 1, 'Sales Floor'),
+    ('SF_B', 'Sale Floor - Zone B', 1, 'Sales Floor'),
+    ('SF_C', 'Sale Floor - Zone C', 1, 'Sales Floor'),
+    ('SF_D', 'Sale Floor - Zone D', 1, 'Sales Floor'),
+    ('CSH',  'Cashier',             1, 'Cashier'),
+    ('FR1',  'Fitting Room 1',      1, 'Fitting Room'),
+    ('ALT',  'Alteration',          1, 'Alteration'),
+    ('RN',   'Runner',              2, 'Runner'),
+    ('SCO',  'Self Check-Out',      2, 'Self Check-Out'),
+    ('FR2',  'Fitting Room 2',      2, 'Fitting Room'),
+    ('RP',   'Replenishment',       2, 'Replenishment'),
+    ('FR3',  'Fitting Room 3',      3, 'Fitting Room'),
+    ('TIDY', 'Tidy',               3,  None),
 ]
 print('Inserting tasks...')
-for task_name, priority, skill_name in TASKS:
-    skill_id = None
-    if skill_name:
-        cur.execute('SELECT id FROM skills WHERE skill_name=%s', (skill_name,))
-        row = cur.fetchone()
-        skill_id = row[0] if row else None
+for task_code, task_name, priority, skill_name in TASKS:
+    skill_id = skill_map.get(skill_name)
     cur.execute(
-        'INSERT IGNORE INTO tasks (task_name, priority_level, required_skill_id) VALUES (%s,%s,%s)',
-        (task_name, priority, skill_id),
+        'INSERT IGNORE INTO tasks (task_code, task_name, priority_level, required_skill_id) VALUES (%s,%s,%s,%s)',
+        (task_code, task_name, priority, skill_id),
     )
 
 # ─────────────────────────────────────────
@@ -140,7 +154,6 @@ for _ in range(20):
     name  = fake.name()
     email = fake.unique.email()
     etype = random.choice(['FT', 'PT'])
-    # Random availability: at least 4 days a week
     avail = ['0'] * 7
     days  = random.sample(range(7), random.randint(4, 7))
     for d in days:
@@ -153,10 +166,36 @@ for _ in range(20):
     emp_ids.append(cur.lastrowid)
 
 print('Assigning skills to employees...')
+skill_ids = list(skill_map.values())
+
+# Guarantee each skill is covered by at least 3 employees for realistic DWS coverage.
+# Sales Floor needs the most (4 SF zones require 4+ capable staff).
+GUARANTEED = {
+    'Sales Floor': 8, 'Cashier': 4, 'Fitting Room': 4,
+    'Alteration': 3, 'Runner': 4, 'Self Check-Out': 3, 'Replenishment': 4,
+}
+emp_skills: dict[int, set] = {eid: set() for eid in emp_ids}
+
+# Round-robin distribute guaranteed slots
+emp_pool = list(emp_ids)
+random.shuffle(emp_pool)
+pool_idx = 0
+for skill_name, count in GUARANTEED.items():
+    sid = skill_map[skill_name]
+    for _ in range(count):
+        eid = emp_pool[pool_idx % len(emp_pool)]
+        emp_skills[eid].add(sid)
+        pool_idx += 1
+
+# Each employee gets 2–4 total skills (top up randomly)
 for eid in emp_ids:
-    # Every employee gets 2–4 random skills
-    chosen = random.sample(skill_ids, random.randint(2, 4))
-    for sid in chosen:
+    target = random.randint(2, 4)
+    remaining = [s for s in skill_ids if s not in emp_skills[eid]]
+    extra = random.sample(remaining, min(max(0, target - len(emp_skills[eid])), len(remaining)))
+    emp_skills[eid].update(extra)
+
+for eid, sids in emp_skills.items():
+    for sid in sids:
         proficiency = random.randint(1, 5)
         cur.execute(
             'INSERT IGNORE INTO employee_skills (employee_id, skill_id, proficiency_level) VALUES (%s,%s,%s)',
