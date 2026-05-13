@@ -17,15 +17,37 @@ const TASK_COLORS = {
   ALT:  { bg: 'bg-purple-500',  text: 'text-white', light: 'bg-purple-100 text-purple-800' },
 }
 
-const PRIORITY_LABEL = { 1: 'P1 Critical', 2: 'P2 Supporting', 3: 'P3 Flexible' }
+const TASK_COLORS_EXTRA = {
+  TIDY: { bg: 'bg-slate-400',  text: 'text-white', light: 'bg-slate-100 text-slate-600' },
+}
+const ALL_COLORS = { ...TASK_COLORS, ...TASK_COLORS_EXTRA }
+
 const PRIORITY_COLOR = {
   1: 'bg-red-100 text-red-700',
   2: 'bg-amber-100 text-amber-700',
   3: 'bg-green-100 text-green-700',
 }
 
+// Fallback store hours by day index (0=Mon … 6=Sun), matching spec-v2
+const STORE_HOURS_BY_DAY = [
+  { open: '09:00', close: '17:30' },
+  { open: '09:00', close: '17:30' },
+  { open: '09:00', close: '17:30' },
+  { open: '09:00', close: '21:00' },
+  { open: '09:00', close: '21:00' },
+  { open: '09:30', close: '17:00' },
+  { open: '10:00', close: '17:00' },
+]
+
+const DAY_NAMES = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+
 function today() {
   return new Date().toISOString().slice(0, 10)
+}
+
+function dayIndex(dateStr) {
+  const d = new Date(dateStr)
+  return (d.getUTCDay() + 6) % 7   // 0=Mon … 6=Sun
 }
 
 function timeToMin(t) {
@@ -35,23 +57,34 @@ function timeToMin(t) {
 
 // ─── Gantt Bar ────────────────────────────────────────────────────────────────
 function GanttBar({ slot, dayStart, dayEnd }) {
-  const total    = dayEnd - dayStart
-  const left     = ((timeToMin(slot.start) - dayStart) / total) * 100
-  const width    = ((timeToMin(slot.end) - timeToMin(slot.start)) / total) * 100
-  const isBreak  = slot.type === 'break'
-  const colors   = isBreak ? null : TASK_COLORS[slot.task_code]
+  const total   = dayEnd - dayStart
+  const left    = ((timeToMin(slot.start) - dayStart) / total) * 100
+  const width   = ((timeToMin(slot.end) - timeToMin(slot.start)) / total) * 100
+  const isBreak = slot.type === 'break'
+  const isPrep  = slot.task_code === 'TIDY'
+  const colors  = isBreak ? null : (ALL_COLORS[slot.task_code] || { bg: 'bg-gray-400', text: 'text-white' })
+
+  // What to display inside the bar based on available space
+  let label = null
+  if (isBreak) {
+    label = width > 2 ? '☕' : null
+  } else if (width > 2.5) {
+    label = slot.task_code
+  }
 
   return (
     <div
-      className={`absolute top-1 bottom-1 rounded flex items-center justify-center text-xs font-medium overflow-hidden
+      className={`absolute top-1 bottom-1 rounded flex items-center justify-center text-xs font-medium overflow-hidden select-none
         ${isBreak
           ? 'bg-gray-200 text-gray-500 border border-gray-300'
-          : `${colors?.bg || 'bg-gray-400'} ${colors?.text || 'text-white'}`
+          : `${colors.bg} ${colors.text} ${isPrep ? 'opacity-60' : ''}`
         }`}
-      style={{ left: `${left}%`, width: `${Math.max(width, 1)}%` }}
-      title={isBreak ? `Break (${slot.break_type})` : `${slot.task_code} — ${slot.start}–${slot.end}`}
+      style={{ left: `${left}%`, width: `${Math.max(width, 0.8)}%` }}
+      title={isBreak
+        ? `${slot.break_type === '60min' ? 'Lunch break' : 'Short break'} ${slot.start}–${slot.end}`
+        : `${slot.task_name} (${slot.task_code}) ${slot.start}–${slot.end}`}
     >
-      {width > 6 && (isBreak ? '☕' : slot.task_code)}
+      {label}
     </div>
   )
 }
@@ -122,9 +155,21 @@ export default function DWSPage() {
     }
   }
 
+  // Derive store hours and day name — use what the API returned, fall back to spec-v2 lookup
+  const idx        = dayIndex(date)
+  const storeHours = dws?.store_hours || STORE_HOURS_BY_DAY[idx]
+  const dayName    = dws?.day || DAY_NAMES[idx]
+
+  // Sort schedules by earliest shift/slot start so earlier shifts appear on top
+  const schedules = [...(dws?.schedules || [])].sort((a, b) => {
+    const aStart = a.shift_start || a.schedule?.[0]?.start || '00:00'
+    const bStart = b.shift_start || b.schedule?.[0]?.start || '00:00'
+    return aStart.localeCompare(bStart) || a.employee_name.localeCompare(b.employee_name)
+  })
+
   // Determine Gantt axis range
-  const dayStart = dws ? Math.min(...dws.schedules.map(s => timeToMin(s.schedule[0]?.start || '09:00'))) : 9 * 60
-  const dayEnd   = dws ? Math.max(...dws.schedules.map(s => timeToMin(s.schedule.at(-1)?.end || '18:00'))) : 18 * 60
+  const dayStart = schedules.length ? Math.min(...schedules.map(s => timeToMin(s.schedule[0]?.start || '07:00'))) : 7 * 60
+  const dayEnd   = schedules.length ? Math.max(...schedules.map(s => timeToMin(s.schedule.at(-1)?.end || '22:00'))) : 22 * 60
   const hourTicks = []
   for (let m = dayStart; m <= dayEnd; m += 60) {
     hourTicks.push({ min: m, label: `${String(Math.floor(m / 60)).padStart(2, '0')}:00` })
@@ -181,16 +226,16 @@ export default function DWSPage() {
           <div className="grid grid-cols-4 gap-4">
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
               <p className="text-xs text-gray-500">Date</p>
-              <p className="text-lg font-bold text-gray-800">{dws.day}</p>
+              <p className="text-lg font-bold text-gray-800">{dayName}</p>
               <p className="text-xs text-gray-400">{dws.date}</p>
             </div>
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
               <p className="text-xs text-gray-500">Store Hours</p>
-              <p className="text-lg font-bold text-indigo-600">{dws.store_hours?.open} – {dws.store_hours?.close}</p>
+              <p className="text-lg font-bold text-indigo-600">{storeHours.open} – {storeHours.close}</p>
             </div>
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
               <p className="text-xs text-gray-500">Staff Scheduled</p>
-              <p className="text-lg font-bold text-emerald-600">{dws.staff_count ?? dws.schedules?.length}</p>
+              <p className="text-lg font-bold text-emerald-600">{dws.staff_count ?? schedules.length}</p>
             </div>
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
               <p className="text-xs text-gray-500">Understaffed Tasks</p>
@@ -224,7 +269,7 @@ export default function DWSPage() {
 
             {/* Employee rows */}
             <div className="space-y-1 mt-4">
-              {(dws.schedules || []).map(sched => (
+              {schedules.map(sched => (
                 <div key={sched.employee_id} className="flex items-center gap-2">
                   {/* Name */}
                   <div className="w-36 shrink-0 text-right pr-2">
@@ -245,7 +290,7 @@ export default function DWSPage() {
 
             {/* Legend */}
             <div className="mt-5 pt-4 border-t border-gray-100 flex flex-wrap gap-2">
-              {Object.entries(TASK_COLORS).map(([code, c]) => (
+              {Object.entries(ALL_COLORS).map(([code, c]) => (
                 <span key={code} className={`px-2 py-0.5 rounded-full text-xs font-medium ${c.light}`}>
                   {code}
                 </span>
