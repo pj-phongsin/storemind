@@ -1146,3 +1146,98 @@ cd frontend && npm run dev
 | **`--host 0.0.0.0`** | Tells a server to listen on all network interfaces inside Docker, not just localhost |
 | **AI Agent** | Autonomous logic that makes decisions and takes actions based on rules — no manual input needed |
 | **Escalation** | The fallback path when automated logic can't solve a problem — hands off to a human or next system |
+
+
+---
+
+## 16. DWS Generator — Spec-v2 Overhaul
+
+### 16.1 Seed Data Fix
+Updated `database/seed.py` to match spec-v2 skills and tasks:
+
+- **Old skills** (Stock Room, Online Fulfilment, Folding) replaced with:
+  `Sales Floor`, `Cashier`, `Fitting Room`, `Alteration`, `Runner`, `Self Check-Out`, `Replenishment`
+- Tasks updated to spec-v2 codes: `SF_A–SF_D`, `CSH`, `FR1–FR3`, `ALT`, `RN`, `SCO`, `RP`, `TIDY`
+- Guaranteed skill distribution added (e.g. 8 employees get Sales Floor so all 4 SF zones can be covered simultaneously)
+- Cleanup step added so re-running seed.py starts fresh (deletes employees, skills, tasks, shifts first)
+
+```bash
+python database/seed.py
+python database/seed_shifts.py
+```
+
+### 16.2 Shift Structure
+Replaced the old single-wave logic with real store shift templates assigned **round-robin** per day:
+
+| Shift Type | Times | Days |
+|------------|-------|------|
+| Opening | 07:30–16:30, 08:30–18:30 | All days |
+| Opening (Sat) | 07:30–16:30, 08:30–18:00 | Saturday (capped at 18:00) |
+| Mid | 10:00–18:30, 11:00–20:00, 12:30–21:00 | Thu / Fri only |
+| Closing Thu | 10:00–18:30, 13:30–22:00 | Thursday |
+| Closing Sat | 10:00–18:00 | Saturday |
+| Sunday | 09:00–18:00, 09:30–18:00 | Sunday only |
+
+### 16.3 Tidy Task
+Any staff time **before store open** or **after store close** is auto-assigned the `TIDY` task (tidying / store prep). This runs without any manual configuration — the generator detects the period falls outside store hours and assigns TIDY.
+
+### 16.4 Break Patterns
+Each shift template has 3 staggered break patterns so no two employees on the same shift break at the same time:
+- **60-min lunch** comes first (around 11:00–15:00 depending on shift start)
+- **30-min short break** comes second (2–3h after lunch)
+
+### 16.5 Task Assignment Algorithm
+The generator uses a **period-first** approach:
+1. Split the day into time periods at every break edge, shift start/end, and every 2h
+2. For each period, sort available employees — sticky employees (those on a current task) go first
+3. Assign tasks by priority: mandatory uncovered P1 tasks → task priority → coverage count → preference
+4. Stickiness rules: stay on current task up to 120 min; only rotate on periods ≥ 60 min; hard rotate after 4h
+
+### 16.6 Auto-Shift Creation (Future Dates)
+`POST /api/dws/generate` now auto-creates shifts from `availability_mask` if no shifts exist for the date — so any future date works without running `seed_shifts.py` first.
+
+---
+
+## 17. Frontend DWS Page Fixes
+
+File: `frontend/src/pages/DWSPage.jsx`
+
+| Issue | Fix |
+|-------|-----|
+| Store Hours not showing when loaded from DB | Added `STORE_HOURS_BY_DAY` fallback (day-of-week lookup) |
+| Break ☕ hidden in 30-min blocks | Lowered render threshold from `width > 6%` to `width > 2%` |
+| Task code hidden in 30-min blocks | Lowered threshold to `width > 2.5%` |
+| Staff not in shift order | Sort schedules by `shift_start` then employee name |
+| TIDY task missing from Gantt | Added `TIDY` colour (`bg-slate-400`) to colour map and legend |
+
+---
+
+## 18. Roster Page — Spec-v2 Skills
+
+File: `frontend/src/pages/RosterPage.jsx`
+
+Updated skill colour badges and the filter dropdown to use spec-v2 names:
+`Sales Floor`, `Cashier`, `Fitting Room`, `Alteration`, `Runner`, `Self Check-Out`, `Replenishment`
+
+---
+
+## 19. Branch Strategy
+
+| Branch | Purpose |
+|--------|---------|
+| `main` | Full app — Sales, Inventory, Forecast, Roster, DWS, Agent |
+| `roster-dws-only` | Stripped build — Roster, DWS, Agent only |
+
+To apply a change to **both branches**:
+```bash
+# 1. Commit on main
+git checkout main
+git add <file> && git commit -m "..." && git push
+
+# 2. Merge into roster-dws-only
+git checkout roster-dws-only
+git merge main && git push
+
+# 3. Return to main
+git checkout main
+```
